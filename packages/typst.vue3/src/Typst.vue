@@ -4,22 +4,15 @@
 
 <script setup lang="ts">
 import { reactive, onMounted, watch } from 'vue';
-import { $typst } from '@myriaddreamin/typst.ts';
-
-$typst.setCompilerInitOptions({
-  beforeBuild: [],
-  getModule: () =>
-    'https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_web_compiler_bg.wasm',
-});
-
-$typst.setRendererInitOptions({
-  beforeBuild: [],
-  getModule: () =>
-    'https://cdn.jsdelivr.net/npm/@myriaddreamin/typst-ts-renderer/pkg/typst_ts_renderer_bg.wasm',
-});
+import { $typst, BeforeBuildFn } from '@myriaddreamin/typst.ts';
+import { initTypst } from "./typst-init.ts";
 
 interface prop {
   content: string;
+  compilerUrl?: string;
+  compilerBeforeBuild?: BeforeBuildFn[];
+  rendererUrl?: string;
+  rendererBeforeBuild?: BeforeBuildFn[];
 }
 
 const typst = reactive({
@@ -31,6 +24,7 @@ const props = withDefaults(defineProps<prop>(), {
 });
 
 onMounted(async () => {
+  initTypst(props);
   typst.compiled = await $typst.svg({ mainContent: props.content });
 });
 

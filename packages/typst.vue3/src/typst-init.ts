@@ -24,4 +24,3 @@ export function initTypst(options?: {
   });
   initialized = true;
 }
-export { $typst };

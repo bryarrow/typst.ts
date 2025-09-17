@@ -4,15 +4,12 @@
 
 <script setup lang="ts">
 import { reactive, onMounted, watch } from 'vue';
-import { $typst, BeforeBuildFn } from '@myriaddreamin/typst.ts';
-import { initTypst } from "./typst-init.ts";
+import { $typst } from '@myriaddreamin/typst.ts';
+import { TypstSnippet } from '@myriaddreamin/typst.ts/dist/esm/contrib/snippet.mjs';
 
 interface prop {
   content: string;
-  compilerUrl?: string;
-  compilerBeforeBuild?: BeforeBuildFn[];
-  rendererUrl?: string;
-  rendererBeforeBuild?: BeforeBuildFn[];
+  typstSnippet?: TypstSnippet;
 }
 
 const typst = reactive({
@@ -24,13 +21,25 @@ const props = withDefaults(defineProps<prop>(), {
 });
 
 onMounted(async () => {
-  initTypst(props);
-  typst.compiled = await $typst.svg({ mainContent: props.content });
+  let typstSnippet;
+  if (props.typstSnippet instanceof TypstSnippet) {
+    typstSnippet = props.typstSnippet;
+  } else {
+    typstSnippet = $typst;
+  }
+  typst.compiled = await typstSnippet.svg({ mainContent: props.content });
 });
 
-watch(()=>props.content, async (newVal, _) => {
-  typst.compiled = await $typst.svg({ mainContent: newVal });
-});
+watch(() => props.content, async (newVal, _) => {
+  let typstSnippet;
+  if (props.typstSnippet instanceof TypstSnippet) {
+      typstSnippet = props.typstSnippet;
+    } else {
+      typstSnippet = $typst;
+  }
+
+  typst.compiled = await typstSnippet.svg({ mainContent: newVal });
+},);
 </script>
 
 <style lang="css"></style>

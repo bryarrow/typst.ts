@@ -1,2 +1,4 @@
 import Typst from './Typst.vue';
-export default Typst;
+import TypstDocument from './TypstDocument.vue';
+
+export { Typst, TypstDocument };

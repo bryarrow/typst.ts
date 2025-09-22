@@ -1,4 +1,4 @@
-import type { CompileOptions, TypstCompiler } from '../compiler.mjs';
+import type { CompileOptions, TypstCompiler, TypstFontBuilder } from '../compiler.mjs';
 import {
   withPackageRegistry,
   withAccessModel,
@@ -6,10 +6,10 @@ import {
   type InitOptions,
   preloadFontAssets,
   disableDefaultFontAssets,
-  preloadRemoteFonts,
+  loadFonts,
   LoadRemoteAssetsOptions,
-  LoadRemoteFontsOptions,
 } from '../options.init.mjs';
+import { loadFontSync } from '../init.mjs';
 import type { TypstRenderer, RenderSession } from '../renderer.mjs';
 import type { RenderToCanvasOptions, RenderSvgOptions } from '../options.render.mjs';
 import { MemoryAccessModel, type WritableAccessModel } from '../fs/index.mjs';
@@ -29,6 +29,10 @@ type PromiseJust<T> = (() => Promise<T>) | T;
 
 interface CompileOptionsCommon {
   /**
+   * The root of the main file.
+   */
+  root?: string;
+  /**
    * Adds a string key-value pair visible through `sys.inputs`
    *
    * Note: pass `{}` to clear `sys.inputs`
@@ -45,17 +49,17 @@ interface CompileOptionsCommon {
  */
 export type SweetCompileOptions = (
   | {
-      /**
-       * The path of the main file.
-       */
-      mainFilePath: string;
-    }
+    /**
+     * The path of the main file.
+     */
+    mainFilePath: string;
+  }
   | {
-      /**
-       * The source content of the main file.
-       */
-      mainContent: string;
-    }
+    /**
+     * The source content of the main file.
+     */
+    mainContent: string;
+  }
 ) &
   CompileOptionsCommon;
 
@@ -65,11 +69,22 @@ export type SweetCompileOptions = (
 export type SweetRenderOptions =
   | SweetCompileOptions
   | {
-      /**
-       * The artifact data in vector format.
-       */
-      vectorData: Uint8Array;
-    };
+    /**
+     * The artifact data in vector format.
+     */
+    vectorData: Uint8Array;
+  };
+
+export type SweetLazyFont = {
+  info: any;
+} & (
+    | {
+      blob: (index: number) => Uint8Array;
+    }
+    | {
+      url: string;
+    }
+  );
 
 type Role = 'compiler' | 'renderer';
 
@@ -129,6 +144,8 @@ export class TypstSnippet {
   /** @internal */
   private cc?: PromiseJust<TypstCompiler>;
   /** @internal */
+  private fr?: PromiseJust<TypstFontBuilder>;
+  /** @internal */
   private ex?: PromiseJust<TypstRenderer>;
 
   /**
@@ -147,9 +164,11 @@ export class TypstSnippet {
    */
   constructor(options?: {
     compiler?: PromiseJust<TypstCompiler>;
+    fontResolver?: PromiseJust<TypstFontBuilder>;
     renderer?: PromiseJust<TypstRenderer>;
   }) {
     this.cc = options?.compiler || TypstSnippet.buildLocalCompiler;
+    this.fr = options?.fontResolver || TypstSnippet.buildLocalFontResolver;
     this.ex = options?.renderer || TypstSnippet.buildLocalRenderer;
     this.mainFilePath = '/main.typ';
     this.providers = [];
@@ -163,11 +182,21 @@ export class TypstSnippet {
     this.cc = cc;
   }
 
+  async getFontResolver() {
+    return (typeof this.fr === 'function' ? (this.fr = await this.fr()) : this.fr)!;
+  }
+
   /**
    * Get an initialized compiler instance from the utility instance.
    */
   async getCompiler() {
     return (typeof this.cc === 'function' ? (this.cc = await this.cc()) : this.cc)!;
+  }
+
+  private async getCompilerReset() {
+    const compiler = await this.getCompiler();
+    await compiler.reset();
+    return compiler;
   }
 
   /**
@@ -181,8 +210,8 @@ export class TypstSnippet {
   /**
    * Get an initialized renderer instance from the utility instance.
    */
-  async getRenderer() {
-    return typeof this.ex === 'function' ? (this.ex = await this.ex()) : this.ex;
+  async getRenderer(): Promise<TypstRenderer> {
+    return typeof this.ex === 'function' ? (this.ex = await this.ex()) : this.ex!;
   }
 
   private providers?: PromiseJust<TypstSnippetProvider>[];
@@ -217,7 +246,7 @@ export class TypstSnippet {
     return {
       key: 'access-model',
       forRoles: ['compiler'],
-      provides: [preloadRemoteFonts(userFonts)],
+      provides: [loadFonts(userFonts)],
     };
   }
 
@@ -399,6 +428,27 @@ export class TypstSnippet {
   }
 
   /**
+   * Adds a font to the compiler.
+   *
+   * @example
+   *
+   * ```typescript
+   * const fonts = await fetch('fontInfo.json').then(res => res.json());
+   * $typst.addFonts(fonts.map(font => $typst.loadFont(font.url)));
+   * ```
+   *
+   * @param fontInfos the font infos to add.
+   */
+  async setFonts(fontInfos: SweetLazyFont[]) {
+    const fb = await this.getFontResolver();
+    for (const font of fontInfos) {
+      await fb.addLazyFont(font, 'blob' in font ? font.blob : loadFontSync(font), font);
+    }
+    const compiler = await this.getCompiler();
+    await fb.build(async fonts => compiler.setFonts(fonts));
+  }
+
+  /**
    * Add a source file to the compiler.
    * See {@link TypstCompiler#addSource}.
    */
@@ -437,7 +487,8 @@ export class TypstSnippet {
    */
   async vector(o?: SweetCompileOptions) {
     const opts = await this.getCompileOptions(o);
-    return (await this.getCompiler())
+    const compiler = await this.getCompilerReset();
+    return compiler
       .compile(opts)
       .then(res => res.result)
       .finally(() => this.removeTmp(opts));
@@ -450,7 +501,8 @@ export class TypstSnippet {
   async pdf(o?: SweetCompileOptions) {
     const opts = await this.getCompileOptions(o);
     opts.format = 'pdf';
-    return (await this.getCompiler())
+    const compiler = await this.getCompilerReset();
+    return compiler
       .compile(opts)
       .then(res => res.result)
       .finally(() => this.removeTmp(opts));
@@ -491,7 +543,8 @@ export class TypstSnippet {
    */
   async query<T>(o: SweetCompileOptions & { selector: string; field?: string }): Promise<T> {
     const opts = await this.getCompileOptions(o);
-    return (await this.getCompiler())
+    const compiler = await this.getCompilerReset();
+    return compiler
       .query<T>({
         ...o,
         ...opts,
@@ -503,7 +556,8 @@ export class TypstSnippet {
    * Get token legend for semantic tokens.
    */
   async getSemanticTokenLegend(): Promise<SemanticTokensLegend> {
-    return (await this.getCompiler()).getSemanticTokenLegend();
+    const compiler = await this.getCompilerReset();
+    return compiler.getSemanticTokenLegend();
   }
 
   /**
@@ -513,7 +567,8 @@ export class TypstSnippet {
    */
   async getSemanticTokens(o: SweetCompileOptions & { resultId?: string }): Promise<SemanticTokens> {
     const opts = await this.getCompileOptions(o);
-    return (await this.getCompiler())
+    const compiler = await this.getCompilerReset();
+    return compiler
       .getSemanticTokens({
         mainFilePath: opts.mainFilePath,
         resultId: o.resultId,
@@ -608,7 +663,7 @@ export class TypstSnippet {
               return undefined;
             }),
           );
-        } catch (e) {}
+        } catch (e) { }
       } else {
         $typst.use(TypstSnippet.fetchPackageRegistry());
       }
@@ -654,6 +709,19 @@ export class TypstSnippet {
     const compiler = createTypstCompiler();
     await compiler.init(this.ccOptions);
     return compiler;
+  }
+
+  /** @internal */
+  static async buildLocalFontResolver(this: TypstSnippet) {
+    const { createTypstFontBuilder } = (await import(
+      // @ts-ignore
+      '@myriaddreamin/typst.ts/compiler'
+    )) as any as typeof import('../compiler.mjs');
+
+    await this.prepareUse();
+    const fonts = createTypstFontBuilder();
+    await fonts.init(this.ccOptions);
+    return fonts;
   }
 
   /** @internal */

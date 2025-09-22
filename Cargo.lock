@@ -5352,6 +5352,8 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "sha2",
+ "typst",
+ "typst-assets",
  "typst-ts-test-common",
  "wasm-bindgen",
  "wasm-bindgen-futures",

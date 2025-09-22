@@ -3,7 +3,7 @@ import type * as typst from '@myriaddreamin/typst-ts-web-compiler';
 import { buildComponent } from './init.mjs';
 import { SemanticTokens, SemanticTokensLegend, kObject } from './internal.types.mjs';
 
-import { preloadRemoteFonts, type InitOptions } from './options.init.mjs';
+import { loadFonts, type InitOptions } from './options.init.mjs';
 import { LazyWasmModule } from './wasm.mjs';
 
 /**
@@ -56,11 +56,24 @@ export type DiagnosticsData = {
   full: DiagnosticMessage;
 };
 
-interface CompileOptionsCommon {
+interface DiagOpts<D extends DiagnosticsFormat = DiagnosticsFormat> {
+  /**
+   * Whether to include diagnostic information in the result.
+   * Note: it will be set to 'full' by default in v0.6.0
+   * @default 'full'
+   */
+  diagnostics?: D;
+}
+
+interface SnapshotOptions {
   /**
    * The path of the main file.
    */
   mainFilePath: string;
+  /**
+   * The root of the main file.
+   */
+  root?: string;
   /**
    * Adds a string key-value pair visible through `sys.inputs`
    *
@@ -76,7 +89,8 @@ interface CompileOptionsCommon {
 interface TransientCompileOptions<
   F extends CompileFormat = any,
   Diagnostics extends DiagnosticsFormat = DiagnosticsFormat,
-> extends CompileOptionsCommon {
+> extends SnapshotOptions,
+  DiagOpts<Diagnostics> {
   /**
    * The format of the artifact.
    * - 'vector': can then load to the renderer to render the document.
@@ -84,16 +98,11 @@ interface TransientCompileOptions<
    * @default 'vector'
    */
   format?: F;
-  /**
-   * Whether to include diagnostic information in the result.
-   * Note: it will be set to 'full' by default in v0.6.0
-   * @default 'full'
-   */
-  diagnostics?: Diagnostics;
 }
 
 interface IncrementalCompileOptions<Diagnostics extends DiagnosticsFormat = DiagnosticsFormat>
-  extends CompileOptionsCommon {
+  extends SnapshotOptions,
+  DiagOpts<Diagnostics> {
   /**
    * The format of the incrementally exported artifact.
    * @default 'vector'
@@ -103,16 +112,9 @@ interface IncrementalCompileOptions<Diagnostics extends DiagnosticsFormat = Diag
    * The incremental server for the document.
    */
   incrementalServer: IncrementalServer;
-  /**
-   * Whether to include diagnostic information in the result.
-   * Note: Before v0.6.0, when diagnostics is not set, the result will be a Uint8Array.
-   * After v0.6.0, when diagnostics is not set, the result will be a CompileResult<Uint8Array> without diagnostics.
-   * @default 'full'
-   */
-  diagnostics?: Diagnostics;
 }
 
-export interface QueryOptions extends CompileOptionsCommon {
+export interface QueryOptions {
   /**
    * select part of document for query.
    */
@@ -171,6 +173,140 @@ interface CompileResult<T, D extends DiagnosticsFormat> {
   diagnostics?: DiagnosticsData[D][];
 }
 
+export interface TypstFontInfo { }
+
+enum TypstFontResolverCons { }
+export type TypstFontResolver = TypstFontResolverCons;
+
+export interface TypstFontBuilder {
+  /**
+   * Initialize the font builder.
+   * @param options - The options for initializing the font builder.
+   */
+  init(options?: Partial<InitOptions>): Promise<void>;
+  /**
+   * Get the font info.
+   *
+   * @param font_buffer - The font buffer to get the font info.
+   * @returns {TypstFontInfo} - The font info.
+   */
+  getFontInfo(font_buffer: Uint8Array): Promise<TypstFontInfo>;
+  /**
+   * Add a raw font.
+   *
+   * @param font_buffer - The font buffer to add.
+   */
+  addFontData(font_buffer: Uint8Array): Promise<void>;
+  /**
+   * Add a lazy font.
+   *
+   * @param info - The font info, usually from {@link getFontInfo}.
+   * @param blob - The blob function to get the font buffer.
+   * @param context - The context.
+   */
+  addLazyFont(
+    info: TypstFontInfo,
+    blob: (idx: number) => Uint8Array,
+    context?: object,
+  ): Promise<void>;
+
+  /**
+   * Build the font resolver. The font resolver will be freed after the callback
+   * is invoked and before returning the build function.
+   *
+   * @param cb - The function to use the font resolver.
+   * @returns {Promise<T>} - The result of the function.
+   */
+  build<T>(cb: (resolver: TypstFontResolver) => Promise<T>): Promise<T>;
+}
+
+/**
+ * create a Typst font builder.
+ * @returns {TypstFontBuilder} - The Typst font builder.
+ * @example
+ * ```typescript
+ * import { createTypstFontBuilder } from 'typst';
+ * const fb = createTypstFontBuilder();
+ * await fb.init();
+ * await fb.addFontData(new Uint8Array(await fetch('font.ttf').then(r => r.arrayBuffer())));
+ * await fb.build();
+ * ```
+ */
+export function createTypstFontBuilder(): TypstFontBuilder {
+  return new TypstFontBuilderDriver();
+}
+
+export class TypstWorld {
+  private [kObject]: typst.TypstCompileWorld;
+
+  constructor(world: typst.TypstCompileWorld) {
+    this[kObject] = world;
+  }
+
+  /**
+   * Compile the paged document.
+   *
+   * @param {DiagnosticsFormat} format - The format of the diagnostics.
+   * @returns {Promise<{ diagnostics?: DiagnosticsData[DiagnosticsFormat][] }>} - The result of the compilation.
+   */
+  compile<D extends DiagnosticsFormat = 'full'>(
+    opts?: DiagOpts<D>,
+  ): Promise<CompileResult<undefined, D> & { hasError: boolean }> {
+    return this[kObject].compile(0, getDiagnosticsArg(opts?.diagnostics));
+  }
+
+  /**
+   * Compile the paged document.
+   *
+   * @param {DiagnosticsFormat} format - The format of the diagnostics.
+   * @returns {Promise<{ diagnostics?: DiagnosticsData[DiagnosticsFormat][] }>} - The result of the compilation.
+   */
+  compileHtml<D extends DiagnosticsFormat = 'full'>(
+    opts?: DiagOpts<D>,
+  ): Promise<CompileResult<undefined, D> & { hasError: boolean }> {
+    return this[kObject].compile(1, getDiagnosticsArg(opts?.diagnostics));
+  }
+
+  /**
+   * Runs query on the paged document.
+   */
+  async query(options: QueryOptions): Promise<string> {
+    return this[kObject].query(0, options.selector, options.field);
+  }
+
+  /**
+   * Get the title of the paged document.
+   * Throw error if the world didn't compile the paged document.
+   *
+   * @returns {string | undefined} - The title of the paged document.
+   */
+  title(): string | undefined {
+    return this[kObject].title(0);
+  }
+
+  /**
+   * Export the paged document as vector format.
+   *
+   * @returns {Uint8Array | undefined} - The title of the paged document.
+   */
+  vector<D extends DiagnosticsFormat = 'full'>(
+    opts?: DiagOpts<D>,
+  ): Promise<CompileResult<Uint8Array, D>> {
+    return this[kObject].get_artifact(0, getDiagnosticsArg(opts?.diagnostics)) || {};
+  }
+
+  /**
+   * Export the paged document to PDF.
+   *
+   * @returns {Uint8Array | undefined} - The title of the paged document.
+   */
+  pdf<D extends DiagnosticsFormat = 'full'>(
+    opts?: DiagOpts<D>,
+  ): Promise<CompileResult<Uint8Array, D>> {
+    return this[kObject].get_artifact(1, getDiagnosticsArg(opts?.diagnostics)) || {};
+  }
+}
+
 /**
  * The interface of Typst compiler.
  */
@@ -210,11 +346,20 @@ export interface TypstCompiler {
     options: CompileOptions<any, D>,
   ): Promise<CompileResult<Uint8Array, D>>;
 
+  runWithWorld<T>(options: SnapshotOptions, cb: (world: TypstWorld) => Promise<T>): Promise<T>;
+
+  /**
+   * Set the fonts to the compiler. Note: multiple compilers can share the same fonts.
+   *
+   * @param {TypstFontResolver} fonts - The fonts to set.
+   */
+  setFonts(fonts: TypstFontResolver): void;
+
   /**
    * experimental
    * Query the result with document
    */
-  query<T>(options: QueryOptions): Promise<T>;
+  query<T>(options: QueryOptions & SnapshotOptions): Promise<T>;
 
   /**
    * Print the AST of the main file.
@@ -308,13 +453,46 @@ export function createTypstCompiler(): TypstCompiler {
   return new TypstCompilerDriver();
 }
 
-class TypstCompilerDriver {
+export class TypstFontBuilderDriver implements TypstFontBuilder {
+  private fontBuilderJs: typeof typst;
+  private fontBuilder: typst.TypstFontResolverBuilder;
+
+  async init(options?: Partial<InitOptions>): Promise<void> {
+    this.fontBuilderJs = await import('@myriaddreamin/typst-ts-web-compiler');
+    /// init typst wasm module
+    await gCompilerModule.init(options?.getModule?.());
+
+    this.fontBuilder = new this.fontBuilderJs.TypstFontResolverBuilder();
+  }
+
+  async getFontInfo(font_buffer: Uint8Array): Promise<TypstFontInfo> {
+    return this.fontBuilder.get_font_info(font_buffer) as TypstFontInfo;
+  }
+
+  async addFontData(font_buffer: Uint8Array): Promise<void> {
+    this.fontBuilder.add_raw_font(font_buffer);
+  }
+  async addLazyFont<C extends TypstFontInfo>(
+    info: TypstFontInfo,
+    blob: (this: C, idx: number) => Uint8Array,
+  ): Promise<void> {
+    return this.fontBuilder.add_lazy_font(info, blob);
+  }
+  async build<T>(cb: (resolver: TypstFontResolver) => Promise<T>): Promise<T> {
+    const fonts = await this.fontBuilder.build();
+    const result = await cb(fonts as any as TypstFontResolver);
+    fonts.free();
+    return result;
+  }
+}
+
+class TypstCompilerDriver implements TypstCompiler {
   compiler: typst.TypstCompiler;
   compilerJs: typeof typst;
 
   static defaultAssets = ['text' as const];
 
-  constructor() {}
+  constructor() { }
 
   async init(options?: Partial<InitOptions>): Promise<void> {
     this.compilerJs = await import('@myriaddreamin/typst-ts-web-compiler');
@@ -333,25 +511,32 @@ class TypstCompilerDriver {
     );
 
     if (!hasPreloadRemoteFonts || (!hasSpecifiedAssets && !hasDisableAssets)) {
-      beforeBuild.push(preloadRemoteFonts([], { assets: TypstCompilerDriver.defaultAssets }));
+      beforeBuild.push(loadFonts([], { assets: TypstCompilerDriver.defaultAssets }));
     }
 
     const hasFontLoader = beforeBuild.some((fn: any) => fn._kind === 'fontLoader');
     if (!hasFontLoader) {
       throw new Error(
-        'TypstCompiler: no font loader found, please use font loaders, e.g. preloadRemoteFonts or preloadSystemFonts',
+        'TypstCompiler: no font loader found, please use font loaders, e.g. loadFonts or preloadSystemFonts',
       );
     }
     this.compiler = await buildComponent(options, gCompilerModule, TypstCompilerBuilder, {});
   }
 
+  setFonts(fonts: TypstFontResolver): void {
+    this.compiler.set_fonts(fonts as any as typst.TypstFontResolver);
+  }
+
   compile(options: CompileOptions): Promise<any> {
     return new Promise(resolve => {
+      const world = this.compiler.snapshot(
+        options.root,
+        options.mainFilePath,
+        convertInputs(options.inputs),
+      );
       if ('incrementalServer' in options) {
         resolve(
-          this.compiler.incr_compile(
-            options.mainFilePath,
-            convertInputs(options.inputs),
+          world.incr_compile(
             options.incrementalServer[kObject],
             getDiagnosticsArg(options.diagnostics),
           ),
@@ -359,28 +544,28 @@ class TypstCompilerDriver {
         return;
       }
       resolve(
-        this.compiler.compile(
-          options.mainFilePath,
-          convertInputs(options.inputs),
-          options.format || 'vector',
-          getDiagnosticsArg(options.diagnostics),
-        ),
+        world.get_artifact(options.format || 'vector', getDiagnosticsArg(options.diagnostics)),
       );
     });
   }
 
-  query(options: QueryOptions): Promise<any> {
-    return new Promise<any>(resolve => {
-      resolve(
-        JSON.parse(
-          this.compiler.query(
-            options.mainFilePath,
-            convertInputs(options.inputs),
-            options.selector,
-            options.field,
-          ),
-        ),
-      );
+  async runWithWorld<T>(
+    options: SnapshotOptions,
+    cb: (world: TypstWorld) => Promise<T>,
+  ): Promise<T> {
+    const world = this.compiler.snapshot(
+      options.root,
+      options.mainFilePath,
+      convertInputs(options.inputs),
+    );
+    let result = await cb(new TypstWorld(world));
+    world.free();
+    return result;
+  }
+
+  query(options: QueryOptions & SnapshotOptions): Promise<any> {
+    return this.runWithWorld(options, async world => {
+      return JSON.parse(await world.query(options));
     });
   }
 

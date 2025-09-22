@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { onMounted, ref, useTemplateRef, watchEffect } from 'vue';
 import { TypstRenderer } from '@myriaddreamin/typst.ts/renderer';
-import { getRenderer } from './renderer.get.ts';
+import { getRenderer } from './get-renderer.ts';
 
 export interface TypstDocumentProps {
   artifact: Uint8Array;

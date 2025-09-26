@@ -24,32 +24,31 @@ const typstCanvasDiv = useTemplateRef('typstCanvasDiv');
 
 onMounted(async () => {
   renderer = await getRenderer(userRenderer);
-});
-
-watchEffect(async () => {
-  if (artifact.length === 0) {
-    return;
-  }
-  if (svg) {
-    if(fill!== undefined) console.warn('SVG mode doesn\'t support fill');
-    typstSvg.value = await renderer.renderSvg({
-      format: 'vector',
-      artifactContent: artifact,
-    });
-    return;
-  }
-  if (canvas) {
-    if (typstCanvasDiv.value === null) {
-      console.warn('Typst Canvas Element is undefined!');
+  watchEffect(async () => {
+    if (artifact.length === 0) {
       return;
     }
-    await renderer.renderToCanvas({
-      format: 'vector',
-      artifactContent: artifact,
-      backgroundColor: fill,
-      container: typstCanvasDiv.value,
-    });
-  }
+    if (svg) {
+      if(fill!== undefined) console.warn('SVG mode doesn\'t support fill');
+      typstSvg.value = await renderer.renderSvg({
+        format: 'vector',
+        artifactContent: artifact,
+      });
+      return;
+    }
+    if (canvas) {
+      if (typstCanvasDiv.value === null) {
+        console.warn('Typst Canvas Element is undefined!');
+        return;
+      }
+      await renderer.renderToCanvas({
+        format: 'vector',
+        artifactContent: artifact,
+        backgroundColor: fill,
+        container: typstCanvasDiv.value,
+      });
+    }
+  });
 });
 </script>
 

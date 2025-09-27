@@ -7,15 +7,16 @@
 import { onMounted, ref, useTemplateRef, watchEffect } from 'vue';
 import { TypstRenderer } from '@myriaddreamin/typst.ts/renderer';
 import { getRenderer } from './get-renderer.ts';
+import { InitOptions } from '@myriaddreamin/typst.ts';
 
 export interface TypstDocumentProps {
   artifact: Uint8Array;
   fill?: string;
   canvas?: boolean;
   svg?: boolean;
-  userRenderer?: TypstRenderer;
+  rendererInitOptions?: Partial<InitOptions>;
 }
-const { artifact, fill, canvas, svg = true, userRenderer } = defineProps<TypstDocumentProps>();
+const { artifact, fill, canvas, svg = true, rendererInitOptions } = defineProps<TypstDocumentProps>();
 
 let renderer: TypstRenderer;
 
@@ -23,7 +24,7 @@ const typstSvg = ref('');
 const typstCanvasDiv = useTemplateRef('typstCanvasDiv');
 
 onMounted(async () => {
-  renderer = await getRenderer(userRenderer);
+  renderer = await getRenderer(rendererInitOptions);
   watchEffect(async () => {
     if (artifact.length === 0) {
       return;
